@@ -1,0 +1,61 @@
+name: Build KaWuXing Cleaner APK
+
+# 当本工程位于仓库子目录 KaWuXingCleaner/ 时，用这份 workflow 放在仓库根目录。
+# GitHub 只读取仓库根目录的 .github/workflows，子目录里的 workflow 不会被执行。
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'KaWuXingCleaner/**'
+      - '.github/workflows/kawuxing-cleaner-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: KaWuXingCleaner
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Android SDK
+        run: |
+          SM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SM" ]; then
+            yes | "$SM" --licenses > /dev/null 2>&1 || true
+            "$SM" --install "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          fi
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KaWuXingCleaner-debug-apk
+          path: KaWuXingCleaner/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Publish to latest release
+        if: success() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          gh release view latest >/dev/null 2>&1 || \
+            gh release create latest --title "最新构建" --notes "自动构建 ${GITHUB_SHA:0:7}" --latest
+          gh release upload latest "$APK" --clobber
